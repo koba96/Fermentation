@@ -99,13 +99,14 @@ class system:
 ## but here we add measurement noise and a random 
 ## adjustment to the rate equations.
 class system_noise(system):
-    def __init__(self, CName, parsName, parsVals, t_span, initialStates, varBatch, varMeasurement):
+    def __init__(self, CName, parsName, parsVals, t_span, initialStates, varBatch, varMeasurement, sparse_dict="None"):
         super().__init__(
             CName, parsName, parsVals, t_span, initialStates            
         )
         self.varBatch = varBatch
         self.varMeasurement = varMeasurement
         self.ncomps = len(self.CName)
+        self.sparse_dict = sparse_dict
         if isinstance(self.varBatch, float) or isinstance(self.varBatch, int):
             mu = 0
         else:
@@ -125,7 +126,7 @@ class system_noise(system):
     ## In this case we add the random effects to the rates 
     
     def system_structure_randomeffects(self, t, C):
-        Cdot = self.system_structure(t, C) + self.rateRandomEffect
+        Cdot = self.system_structure(t, C) - np.abs(self.rateRandomEffect)
         return(Cdot)
     
     def system_sim(self):
@@ -142,8 +143,32 @@ class system_noise(system):
 
         C_sim = C_simInit + error
         return(C_sim)
+    
+    ## Add a method that generates a sparse dataset.
+    # The sparsity is determined by a dictionary, containing {CName : t_span (to keep)}
 
+    def system_sim_sparse(self):
+        if self.sparse_dict == "None":
+            return(print("No sparsity_dict"))
+        
+        ## Simulate from noisy system
+        sims = self.system_sim()
+        
+        for i in range(len(self.CName)):
+            nanInd = np.isin(
+                self.t_span, 
+                self.sparse_dict[self.CName[i]],
+                invert = True
+            )
 
+            sims[nanInd,self.CName.index(self.CName[i])] = np.nan
+        
+        return(sims)
+
+## Define t_start, t_end and stepsize
+t_start = 0
+t_end = 48
+stepsize = 0.1
 
 ## Define the inputs to the class definition
 
@@ -153,7 +178,8 @@ parsName = [
     "k7", "k8", "k9", "k10", "k11", "k12",
     "k13", "k14", "ki", "ks", "kba", "kaa"
 ]
-t_span = np.linspace(0, 48, 49*6)
+
+t_span = np.linspace(t_start, t_end, int((t_end - t_start)/stepsize + 1))
 parsVals = np.array([
     0.0090, 0.0008, 0.0255, 0.6764, 0.0136,
     0.1170, 0.0113, 0.7150, 0.1350, 0.1558,
@@ -162,14 +188,14 @@ parsVals = np.array([
 ])
 initialValues = np.concatenate(
     (
-        np.array([10, 1.1, 60]),
+        np.array([10, 1.1, 30]),
         np.ones(
             len(CName) - 3,
         )/100
     )
 )
 
-print("hi")
+initialValues[CName.index("a")] = 1
 
 ## number of batches to simulate
 n_batch = 10
@@ -178,10 +204,34 @@ n_batch = 10
 varMeasurement = 0.001
 varBatch = np.concatenate(
     (
-        np.array([0.05, 0.02, 0.2])/1000,
+        np.array([0.05, 0.02, 0.2])/100,
         np.zeros(len(CName)-3)
     )
 )
+
+        
+## Create the dictionary that defines the sparse sampling
+tlist = list()
+for i in range(len(CName)):
+    ## For x, y, s we sample every hour
+    if i <= 2:
+        tlist.append(
+            np.linspace(t_start, t_end, int((t_end - t_start)/1 + 1))
+        )
+    ## For these parameters we sample every 4 hours
+    elif i<=5:
+        tlist.append(
+            np.linspace(t_start, t_end, int((t_end - t_start)/4 + 1))
+        )
+    ## For these parameters we sample every 4 hours
+    else:
+        tlist.append(
+            np.linspace(t_start, t_end, int((t_end - t_start)/12 + 1))
+        )
+
+sparse_dict = {CName[i]: tlist[i] for i in range(len(CName))}
+sparse_dict
+
 
 ## Creata a plotting function
 
@@ -194,7 +244,8 @@ def plotFermentation(
         n_batch = 10,
         initialStates = initialValues,
         varBatch = varBatch,
-        varMeasurement = varMeasurement
+        varMeasurement = varMeasurement,
+        sparse_dict = sparse_dict
     ):
     
     ## Create an instance of system object.
@@ -211,7 +262,7 @@ def plotFermentation(
                 t_span = t_span,
                 initialStates = initialStates
             ).system_solve()
-        if classtype == "noisy system":
+        elif classtype == "noisy system":
             bio_sims = system_noise(
                 CName = CName,
                 parsName = parsName,
@@ -221,6 +272,22 @@ def plotFermentation(
                 varBatch = varBatch,
                 varMeasurement = varMeasurement
             ).system_sim()
+        else:
+            if sparse_dict == "None":
+                sys.exit("No sparse_dict")
+            
+            bio_sims = system_noise(
+                CName = CName,
+                parsName = parsName,
+                parsVals = parsVals,
+                t_span = t_span,
+                initialStates = initialStates,
+                varBatch = varBatch,
+                varMeasurement = varMeasurement,
+                sparse_dict=sparse_dict
+            ).system_sim_sparse()
+
+
 
         allsims = np.concatenate(
             (
@@ -245,7 +312,6 @@ def plotFermentation(
 
     df["Batch"] = batches
 
-
     ## Now generate the plots
     fig, axs = plt.subplots(nrowSP,ncolSP)
     fig.set_figheight(15)
@@ -255,7 +321,22 @@ def plotFermentation(
         for j in range(ncolSP):
             if nplot < allsims.shape[1]:
                 # axs[i,j].plot(t_span_plot, allsims[:,i])
-                sns.lineplot(data=df, x="Hours", y = CName[i], ax = axs[i,j], hue="Batch")
+                if classtype == "noisy system" or classtype == "system":
+                    sns.lineplot(
+                        data=df[["Hours", "Batch", CName[nplot]]].dropna(), 
+                        x="Hours", 
+                        y = CName[nplot],
+                        ax = axs[i,j],
+                        hue="Batch"
+                    )
+                else:
+                    sns.scatterplot(
+                        data=df[["Hours", "Batch", CName[nplot]]].dropna(), 
+                        x="Hours", 
+                        y = CName[nplot],
+                        ax = axs[i,j],
+                        hue="Batch", s = 15
+                    )
                 axs[i,j].set_ylabel(CName[nplot])               
                 axs[i,j].set_title(CName[nplot])
                 axs[i,j].get_legend().remove()
@@ -271,13 +352,72 @@ def plotFermentation(
     fig.legend(handles, labels, loc='right')
     return(fig)
 
-test = plotFermentation(classtype="noisy system", n_batch = 5)
-test.show()
 
 
-    
+## Plot the dynamic system
+plotsystem = plotFermentation(
+    classtype = "system",
+    CName = CName,
+    parsName = parsName,
+    parsVals = parsVals,
+    t_span = t_span,
+    n_batch = 10,
+    initialStates = initialValues,
+    varBatch = varBatch,
+    varMeasurement = varMeasurement,
+    sparse_dict = "none"    
+)
 
-    
-    
+plotsystem.suptitle("Deterministic system")
+plotsystem.savefig(
+    fname = os.getcwd() + "\\pyscripts\\Output\\system.png"
+)
+
+plotsystem.show()
+
+
+## Plot the dynamic system with noise    
+
+plotsystem = plotFermentation(
+    classtype = "noisy system",
+    CName = CName,
+    parsName = parsName,
+    parsVals = parsVals,
+    t_span = t_span,
+    n_batch = 10,
+    initialStates = initialValues,
+    varBatch = varBatch,
+    varMeasurement = varMeasurement,
+    sparse_dict = "none"    
+)
+
+plotsystem.suptitle("System with rate variation and noise")
+plotsystem.savefig(
+    fname = os.getcwd() + "\\pyscripts\\Output\\noisy_system.png"
+)
+
+plotsystem.show()
+
+
+## Plot the sparse samples of dynamic system with noise    
+
+plotsystem = plotFermentation(
+    classtype = "sparse noisy system",
+    CName = CName,
+    parsName = parsName,
+    parsVals = parsVals,
+    t_span = t_span,
+    n_batch = 10,
+    initialStates = initialValues,
+    varBatch = varBatch,
+    varMeasurement = varMeasurement,
+    sparse_dict = sparse_dict    
+)
+plotsystem.suptitle("Sparse samples from noisy system")
+plotsystem.savefig(
+    fname = os.getcwd() + "\\pyscripts\\Output\\noisy_system_sparse.png"
+)
+
+plotsystem.show()
 
 
