@@ -145,7 +145,6 @@ class system_noise(system):
 
 
 
-
 ## Define the inputs to the class definition
 
 CName=["x", "y", "s", "b", "ba", "a", "aa", "e", "c02", "h2"]
@@ -184,7 +183,7 @@ varBatch = np.concatenate(
     )
 )
 
-## Creata a plotting function.
+## Creata a plotting function
 
 def plotFermentation(
         classtype = "system",
