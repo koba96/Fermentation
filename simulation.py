@@ -2,349 +2,422 @@ import os
 import sys
 import numpy as np
 import pandas as pd
-import pickle
+import seaborn as sns
 from scipy.integrate import odeint
 from scipy.integrate import solve_ivp
 from matplotlib import pyplot as plt
 
 
-class Person:
-  def __init__(mysillyobject, name, age):
-    mysillyobject.name = name
-    mysillyobject.age = age
-
-  def myfunc(abc):
-    print("Hello my name is " + abc.name)
-
 ## This creates parent class creates an instance of 
 ## a dynamic system define by Component names (CName)
 ## parsName = parameter name and time span
+
+## If you want to change the structure of the system, you need
+## to change def system_structure function.
+
 class system:
-    def __init__(self, CName, parsName, t_span):
+    def __init__(
+            self, CName, parsName, parsVals, t_span,
+            initialStates
+        ):
         self.CName = CName
         self.parsName = parsName
         self.t_span = t_span
+        self.parsVals = parsVals
+        self.lambdaConst = 0.56
+        self.initialStates = initialStates
     
+    ## This function defines the mass balance equations 
+    ## for the system
+    def system_structure(self, t, C):
+        pars = self.parsVals
+        CName = self.CName
+        parsName = self.parsName
+        lambdaConst = self.lambdaConst
+
+        Csol, Cdot = C[:int(len(C))], np.empty(len(C))
+        # this is the differential equation for the x (biomass)
+        Cdot[CName.index("x")] = lambdaConst*(Csol[CName.index("y")]-1)*Csol[CName.index("x")] \
+            - pars[parsName.index("k2")]*Csol[CName.index("x")
+                                            ]*Csol[CName.index("b")]
+
+        # This is the differential equation for the y (rna/rna_min)
+        Cdot[CName.index("y")] = (pars[parsName.index("k1")]*Csol[CName.index("s")]
+                                * (pars[parsName.index("ki")]/(pars[parsName.index("ki")]+Csol[CName.index("b")]))
+                                - lambdaConst*(Csol[CName.index("y")] - 1))*Csol[CName.index("y")]
+
+        # This is the differential equation for s (glucos substrate)
+        Cdot[CName.index("s")] = -pars[parsName.index("k3")]*Csol[CName.index("s")]*Csol[CName.index("x")] \
+            - pars[parsName.index("k4")]*(Csol[CName.index("s")]/(
+                pars[parsName.index("ks")]+Csol[CName.index("s")]))*Csol[CName.index("x")]
+
+        # This is the differential equation for ba (butyrate)
+        Cdot[CName.index("ba")] = pars[parsName.index("k5")]*Csol[CName.index("s")]*(pars[parsName.index("ki")]/(pars[parsName.index("ki")]+Csol[CName.index("b")]))*Csol[CName.index("x")] \
+            - pars[parsName.index("k6")]*(Csol[CName.index("ba")]/(
+                pars[parsName.index("kba")]+Csol[CName.index("ba")]))*Csol[CName.index("x")]
+
+        # This is the differential equation for b (butanol)
+        Cdot[CName.index("b")] = pars[parsName.index(
+            "k7")]*Csol[CName.index("s")]*Csol[CName.index("x")]-0.841*Cdot[CName.index("ba")]
+
+        # This is the differential equation for aa (acetic acid)
+        Cdot[CName.index("aa")] = pars[parsName.index("k8")]*(Csol[CName.index("s")]/(pars[parsName.index("ks")]+Csol[CName.index("s")])) \
+            * (pars[parsName.index("ki")]/(pars[parsName.index("ki")]+Csol[CName.index("b")]))*Csol[CName.index("x")] \
+            - pars[parsName.index("k9")]*(Csol[CName.index("aa")]/(pars[parsName.index("kaa")]*Csol[CName.index("a")]+Csol[CName.index("aa")])) \
+            * (Csol[CName.index("s")]/(pars[parsName.index("ks")]+Csol[CName.index("s")]))*Csol[CName.index("x")]
+
+        # This is the differential equation for a (acetone production)
+        Cdot[CName.index("a")] = pars[parsName.index("k10")]*(Csol[CName.index("s")]/(pars[parsName.index("ks")]+Csol[CName.index("s")]))*Csol[CName.index("x")] \
+            - 0.484*Cdot[CName.index("aa")]
+
+        # This is the differential equation for e (ethanol)
+        Cdot[CName.index("e")] = pars[parsName.index("k11")]*(Csol[CName.index("s")] /
+                                                            (pars[parsName.index("ks")]+Csol[CName.index("s")]))*Csol[CName.index("x")]
+
+        # This is the differential equation for c02
+        Cdot[CName.index("c02")] = pars[parsName.index("k12")]*(Csol[CName.index("s")] /
+                                                                (pars[parsName.index("ks")]+Csol[CName.index("s")]))*Csol[CName.index("x")]
+
+        # This is the differential equation for h2
+        Cdot[CName.index("h2")] = pars[parsName.index("k13")]*(Csol[CName.index("s")]/(pars[parsName.index("ks")]+Csol[CName.index("s")]))*Csol[CName.index("x")] \
+            + pars[parsName.index("k14")]*Csol[CName.index("s")
+                                            ]*Csol[CName.index("x")]
+        
+        return (Cdot)        
+    
+    def system_solve(self):
+        C_sim = odeint(
+            func = self.system_structure,
+            t=self.t_span,
+            y0=self.initialStates,
+            tfirst=True
+        )
+
+        return(C_sim)        
+
+## The next class will inherit from system,
+## but here we add measurement noise and a random 
+## adjustment to the rate equations.
+class system_noise(system):
+    def __init__(self, CName, parsName, parsVals, t_span, initialStates, varBatch, varMeasurement, sparse_dict="None"):
+        super().__init__(
+            CName, parsName, parsVals, t_span, initialStates            
+        )
+        self.varBatch = varBatch
+        self.varMeasurement = varMeasurement
+        self.ncomps = len(self.CName)
+        self.sparse_dict = sparse_dict
+        if isinstance(self.varBatch, float) or isinstance(self.varBatch, int):
+            mu = 0
+        else:
+            mu = np.zeros((len(self.varBatch))) 
+
+        self.rateRandomEffect = np.random.normal(
+            mu, 
+            np.sqrt(self.varBatch), 
+            self.ncomps
+        )
+
+        if np.sum(self.varBatch)==0:
+            self.rateRandomEffect = np.zeros(len(self.CName))
+        
 
 
+    ## In this case we add the random effects to the rates 
+    
+    def system_structure_randomeffects(self, t, C):
+        Cdot = self.system_structure(t, C) - np.abs(self.rateRandomEffect)
+        return(Cdot)
+    
+    def system_sim(self):
+        C_simInit = odeint(
+            func = self.system_structure_randomeffects,
+            t=self.t_span,
+            y0=self.initialStates,
+            tfirst=True
+        )
 
-# We let C be the vector of components
-# We have 9 components in total
+        error = np.random.normal(
+            C_simInit, np.sqrt(self.varMeasurement)*np.abs(C_simInit)            
+        )
 
-# create a named list to keep track of components.
-# y is the qoutient rna/rna_min
-CName = ["x", "y", "s", "b", "ba", "a", "aa", "e", "c02", "h2"]
+        C_sim = C_simInit + error
+        return(C_sim)
+    
+    ## Add a method that generates a sparse dataset.
+    # The sparsity is determined by a dictionary, containing {CName : t_span (to keep)}
 
-# Create a list with the names of parameters of the dynamic system
+    def system_sim_sparse(self):
+        if self.sparse_dict == "None":
+            return(print("No sparsity_dict"))
+        
+        ## Simulate from noisy system
+        sims = self.system_sim()
+        
+        for i in range(len(self.CName)):
+            nanInd = np.isin(
+                self.t_span, 
+                self.sparse_dict[self.CName[i]],
+                invert = True
+            )
+
+            sims[nanInd,self.CName.index(self.CName[i])] = np.nan
+        
+        return(sims)
+
+## Define t_start, t_end and stepsize
+t_start = 0
+t_end = 48
+stepsize = 0.1
+
+## Define the inputs to the class definition
+
+CName=["x", "y", "s", "b", "ba", "a", "aa", "e", "c02", "h2"]
 parsName = [
     "k1", "k2", "k3", "k4", "k5", "k6",
     "k7", "k8", "k9", "k10", "k11", "k12",
     "k13", "k14", "ki", "ks", "kba", "kaa"
 ]
 
-# This is a constant that is used throughout the program
-lambdaConst = 0.56
-
-
-# Create a list with parameter values.
+t_span = np.linspace(t_start, t_end, int((t_end - t_start)/stepsize + 1))
 parsVals = np.array([
     0.0090, 0.0008, 0.0255, 0.6764, 0.0136,
     0.1170, 0.0113, 0.7150, 0.1350, 0.1558,
     0.0258, 0.6139, 0.0185, 0.00013, 0.833,
     2.0, 0.5, 0.5
 ])
+initialValues = np.concatenate(
+    (
+        np.array([10, 1.1, 30]),
+        np.ones(
+            len(CName) - 3,
+        )/100
+    )
+)
 
+initialValues[CName.index("a")] = 1
 
-# Now define function that defines the system, the output is the 
-# RHS of the first order non-linear ODEs
+## number of batches to simulate
+n_batch = 10
 
-# Note that the system is an ODE of order 1
-# t is a sequence
-def system(t, C, pars=parsVals):
-    Csol, Cdot = C[:int(len(C))], np.empty(len(C))
-    # this is the differential equation for the x (biomass)
-    Cdot[CName.index("x")] = lambdaConst*(Csol[CName.index("y")]-1)*Csol[CName.index("x")] \
-        - pars[parsName.index("k2")]*Csol[CName.index("x")
-                                          ]*Csol[CName.index("b")]
+## Variances
+varMeasurement = 0.001
+varBatch = np.concatenate(
+    (
+        np.array([0.05, 0.02, 0.2])/100,
+        np.zeros(len(CName)-3)
+    )
+)
 
-    # This is the differential equation for the y (rna/rna_min)
-    Cdot[CName.index("y")] = (pars[parsName.index("k1")]*Csol[CName.index("s")]
-                              * (pars[parsName.index("ki")]/(pars[parsName.index("ki")]+Csol[CName.index("b")]))
-                              - lambdaConst*(Csol[CName.index("y")] - 1))*Csol[CName.index("y")]
-
-    # This is the differential equation for s (glucos substrate)
-    Cdot[CName.index("s")] = -pars[parsName.index("k3")]*Csol[CName.index("s")]*Csol[CName.index("x")] \
-        - pars[parsName.index("k4")]*(Csol[CName.index("s")]/(
-            pars[parsName.index("ks")]+Csol[CName.index("s")]))*Csol[CName.index("x")]
-
-    # This is the differential equation for ba (butyrate)
-    Cdot[CName.index("ba")] = pars[parsName.index("k5")]*Csol[CName.index("s")]*(pars[parsName.index("ki")]/(pars[parsName.index("ki")]+Csol[CName.index("b")]))*Csol[CName.index("x")] \
-        - pars[parsName.index("k6")]*(Csol[CName.index("ba")]/(
-            pars[parsName.index("kba")]+Csol[CName.index("ba")]))*Csol[CName.index("x")]
-
-    # This is the differential equation for b (butanol)
-    Cdot[CName.index("b")] = pars[parsName.index(
-        "k7")]*Csol[CName.index("s")]*Csol[CName.index("x")]-0.841*Cdot[CName.index("ba")]
-
-    # This is the differential equation for aa (acetic acid)
-    Cdot[CName.index("aa")] = pars[parsName.index("k8")]*(Csol[CName.index("s")]/(pars[parsName.index("ks")]+Csol[CName.index("s")])) \
-        * (pars[parsName.index("ki")]/(pars[parsName.index("ki")]+Csol[CName.index("b")]))*Csol[CName.index("x")] \
-        - pars[parsName.index("k9")]*(Csol[CName.index("aa")]/(pars[parsName.index("kaa")]*Csol[CName.index("a")]+Csol[CName.index("aa")])) \
-        * (Csol[CName.index("s")]/(pars[parsName.index("ks")]+Csol[CName.index("s")]))*Csol[CName.index("x")]
-
-    # This is the differential equation for a (acetone production)
-    Cdot[CName.index("a")] = pars[parsName.index("k10")]*(Csol[CName.index("s")]/(pars[parsName.index("ks")]+Csol[CName.index("s")]))*Csol[CName.index("x")] \
-        - 0.484*Cdot[CName.index("aa")]
-
-    # This is the differential equation for e (ethanol)
-    Cdot[CName.index("e")] = pars[parsName.index("k11")]*(Csol[CName.index("s")] /
-                                                          (pars[parsName.index("ks")]+Csol[CName.index("s")]))*Csol[CName.index("x")]
-
-    # This is the differential equation for c02
-    Cdot[CName.index("c02")] = pars[parsName.index("k12")]*(Csol[CName.index("s")] /
-                                                            (pars[parsName.index("ks")]+Csol[CName.index("s")]))*Csol[CName.index("x")]
-
-    # This is the differential equation for h2
-    Cdot[CName.index("h2")] = pars[parsName.index("k13")]*(Csol[CName.index("s")]/(pars[parsName.index("ks")]+Csol[CName.index("s")]))*Csol[CName.index("x")] \
-        + pars[parsName.index("k14")]*Csol[CName.index("s")
-                                           ]*Csol[CName.index("x")]
-    
-
-    return (Cdot)
-
-
-# Initial values for C
-# for glucose (=s) we set the initial value to 50 g/l,
-# and the biomass (=x) to 10 g/l
-def initialValues(parsVals=parsVals):
-    CName = ["x", "y", "s", "b", "ba", "a", "aa", "e", "c02", "h2"]
-
-    # Create variables for initial values contained in initC
-
-    initCsol, initCdot = np.zeros(len(CName)), np.zeros(len(CName))
-
-    xInit = 0.1
-    yInit = 1.1
-    sInit = 60
-
-    ## Start by initializing initCsol
-    initCsol = np.concatenate(
-        (
-            np.array([xInit, yInit, sInit]),
-            np.ones(7)/100
+        
+## Create the dictionary that defines the sparse sampling
+tlist = list()
+for i in range(len(CName)):
+    ## For x, y, s we sample every hour
+    if i <= 2:
+        tlist.append(
+            np.linspace(t_start, t_end, int((t_end - t_start)/1 + 1))
         )
-    )
+    ## For these parameters we sample every 4 hours
+    elif i<=5:
+        tlist.append(
+            np.linspace(t_start, t_end, int((t_end - t_start)/4 + 1))
+        )
+    ## For these parameters we sample every 4 hours
+    else:
+        tlist.append(
+            np.linspace(t_start, t_end, int((t_end - t_start)/12 + 1))
+        )
 
-    initCsol[CName.index("aa")] = 0.001
+sparse_dict = {CName[i]: tlist[i] for i in range(len(CName))}
+sparse_dict
 
-    ## Now initialize initCdot using the mass balance equations.
-    # initial deriviative for butyrate ("ba")
-    initCdot[CName.index("ba")] = parsVals[parsName.index("k5")]*sInit* \
-    (parsVals[parsName.index("ki")]/(parsVals[parsName.index("ki")]+initCsol[CName.index("b")]))*xInit \
-    - parsVals[parsName.index("k6")]*(initCsol[CName.index("ba")]/(parsVals[parsName.index("ks")]+initCsol[CName.index("ba")]))*xInit 
 
-    # Initial derivative for butanol
-    initCdot[CName.index("b")] = parsVals[parsName.index("k7")]*sInit*xInit - 0.841*initCdot[CName.index("ba")]
+## Creata a plotting function
 
-    # Initial derivate for acetic acid
-    initCdot[CName.index("aa")] = parsVals[parsName.index("k8")]*(initCsol[CName.index("s")]/(parsVals[parsName.index("ks")]+initCsol[CName.index("s")])) \
-    * (parsVals[parsName.index("ki")]/(parsVals[parsName.index("ki")]+initCsol[CName.index("b")]))*initCsol[CName.index("x")] \
-    - parsVals[parsName.index("k9")]*(initCsol[CName.index("aa")]/(parsVals[parsName.index("kaa")]*initCsol[CName.index("a")]+initCsol[CName.index("aa")])) \
-    * (initCsol[CName.index("s")]/(parsVals[parsName.index("ks")]+initCsol[CName.index("s")]))*initCsol[CName.index("x")]
-
-    # initial derivat for acetone ("a")
-    initCdot[CName.index("a")] = parsVals[parsName.index("k10")]*(initCsol[CName.index("s")]/(parsVals[parsName.index("ks")]+initCsol[CName.index("s")]))*initCsol[CName.index("x")] \
-    - 0.484*initCdot[CName.index("aa")]
-
-    #initial derivative for Ethanol ("e")
-    initCdot[CName.index("e")] = parsVals[parsName.index("k11")]*(initCsol[CName.index("s")] /
-    (parsVals[parsName.index("ks")]+initCsol[CName.index("s")]))*initCsol[CName.index("x")]
-
-    #initial derivative for c02
-    initCdot[CName.index("c02")] = parsVals[parsName.index("k12")]*(initCsol[CName.index("s")] /
-    (parsVals[parsName.index("ks")]+initCsol[CName.index("s")]))*initCsol[CName.index("x")]
+def plotFermentation(
+        classtype = "system",
+        CName = CName,
+        parsName = parsName,
+        parsVals = parsVals,
+        t_span = t_span,
+        n_batch = 10,
+        initialStates = initialValues,
+        varBatch = varBatch,
+        varMeasurement = varMeasurement,
+        sparse_dict = sparse_dict
+    ):
     
-    #initial derivative for h2
-    initCdot[CName.index("h2")] = parsVals[parsName.index("k13")]*(initCsol[CName.index("s")]/(parsVals[parsName.index("ks")]+initCsol[CName.index("s")]))*initCsol[CName.index("x")] \
-    + parsVals[parsName.index("k14")]*initCsol[CName.index("s")]*initCsol[CName.index("x")]
+    ## Create an instance of system object.
 
-    ## Now do derivative for biomass (x)
-    initCdot[CName.index("x")] = lambdaConst*(initCsol[CName.index("y")]-1)*initCsol[CName.index("x")] \
-            - parsVals[parsName.index("k2")]*initCsol[CName.index("x")
-                                            ]*initCsol[CName.index("b")]
+    batches = list()
+    allsims = np.empty((0, len(CName)))
 
-    ## Now do derivative for substrate/glucose (s)
-    initCdot[CName.index("s")] = -parsVals[parsName.index("k3")]*initCsol[CName.index("s")]*initCsol[CName.index("x")] \
-            - parsVals[parsName.index("k4")]*(initCsol[CName.index("s")]/(
-                parsVals[parsName.index("ks")]+initCsol[CName.index("s")]))*initCsol[CName.index("x")]
-
-
-    ## Now do derivative for rna/rna_min (y)
-    initCdot[CName.index("y")] = (parsVals[parsName.index("k1")]*initCsol[CName.index("s")]
-                                * (parsVals[parsName.index("ki")]/(parsVals[parsName.index("ki")]+initCsol[CName.index("b")]))
-                                - lambdaConst*(initCsol[CName.index("y")] - 1))*initCsol[CName.index("y")]
-
-
-    initCdot[CName.index("a")] = 0.1
-    return(np.concatenate((initCsol, initCdot)))
-
-
-## Now call the ODE solver
-t_span = np.linspace(0, 240, 240001)
-
-C_sim = odeint(
-    func = system,
-    t=t_span,
-    y0=initialValues()[:10],
-    tfirst=True
-)
-C_sim[0,:]
-
-## Now plot the simulated results
-
-fig, axs = plt.subplots(3,4)
-
-nplot = 0
-for i in range(3):
-    for j in range(4):
-        if nplot <= (len(C_sim[0,:])-1):
-            axs[i,j].plot(t_span, C_sim[:,nplot])
-            axs[i,j].set_title(CName[nplot])
-            nplot = nplot + 1
+    for i in range(n_batch):
+        if classtype == "system":
+            bio_sims = system(
+                CName = CName,
+                parsName = parsName,
+                parsVals = parsVals,
+                t_span = t_span,
+                initialStates = initialStates
+            ).system_solve()
+        elif classtype == "noisy system":
+            bio_sims = system_noise(
+                CName = CName,
+                parsName = parsName,
+                parsVals = parsVals,
+                t_span = t_span,
+                initialStates = initialStates,
+                varBatch = varBatch,
+                varMeasurement = varMeasurement
+            ).system_sim()
         else:
-            fig.delaxes(axs[i][j])
-            nplot = nplot + 1
- 
-
-for ax in axs.flat:
-    ax.set(xlabel = "Hours", ylabel = "g/L")
-
-plt.tight_layout()
-plt.savefig(os.getcwd()+"\Output"+"\system.jpeg")
-plt.show()
-
-## So we see that we can simulate from the dynamic systems.
-## Now we add noise to the system measurements corresponding
-## to 5% rsd.
-rsd = 0.03
-## Initialize a numpy array with noisy measurements of system.
-C_vector = C_sim
-## initialize error_vector
-error_vector = np.zeros(len(C_sim[1,:]))
-cov = np.zeros((len(C_sim[1,:]), len(C_sim[1,:])))
-for i in range(len(C_vector)):
-    np.fill_diagonal(cov, (C_sim[i,:]*rsd)**2)
-    error_vector = np.random.multivariate_normal(
-        mean = np.zeros(len(C_sim[0,:])), cov = cov        
-    )
-    C_vector[i,:] = C_vector[i,:] + error_vector
-
-
-## Now plot the noisy results
-
-fig, axs = plt.subplots(3,4)
-
-nplot = 0
-for i in range(3):
-    for j in range(4):
-        if nplot <= (len(C_vector[0,:])-1):
-            axs[i,j].plot(t_span, C_vector[:,nplot])
-            axs[i,j].set_title(CName[nplot])
-            nplot = nplot + 1
-        else:
-            fig.delaxes(axs[i][j])
-            nplot = nplot + 1
- 
-
-for ax in axs.flat:
-    ax.set(xlabel = "Hours", ylabel = "g/L")
-
-plt.tight_layout()
-plt.savefig(os.getcwd()+"\Output"+"\\noisysystem.jpeg")
-plt.show()
+            if sparse_dict == "None":
+                sys.exit("No sparse_dict")
+            
+            bio_sims = system_noise(
+                CName = CName,
+                parsName = parsName,
+                parsVals = parsVals,
+                t_span = t_span,
+                initialStates = initialStates,
+                varBatch = varBatch,
+                varMeasurement = varMeasurement,
+                sparse_dict=sparse_dict
+            ).system_sim_sparse()
 
 
 
-## Finally, for real datasets, we have at most 5 data points for certain parameters
-## and one sample per hour
+        allsims = np.concatenate(
+            (
+                allsims,
+                bio_sims            
+            )
+        )
+        batches = batches + ["bio" + str(i+1)]*bio_sims.shape[0]
 
-# initialize numpy array containing sparse measurements
+    nrowSP = 3
+    ncolSP = 4
+    t_span_plot = np.tile(t_span, n_batch).reshape((len(t_span)*n_batch, 1))
 
-C_vector_sparse = np.empty(C_vector.shape)
-C_vector_sparse[:] = np.nan
-
-## sampling frequencies
-hours = np.linspace(start=0, stop=240, num=241)
-days = np.linspace(start=24, stop=240, num=10)[:-1]
-bidaily = np.linspace(start=24, stop=240, num=19)[:-1]
-# hourly measurements will be of c02 h2, substrate and biomass
-hourlyVars = ["c02", "s", "h2", "x"]
-hourlyVarsInd = []
-for i in range(len(hourlyVars)):
-    hourlyVarsInd.append(
-        CName.index(hourlyVars[i])
+    ## Create pandas dataframe
+    df = pd.DataFrame(
+        np.concatenate(
+            (t_span_plot, allsims),
+            axis = 1
+        ),
+        columns = ["Hours"] + CName
     )
 
-dailyVars = ["a", "b", "e"]
-dailyVarsInd = []
-for i in range(len(dailyVars)):
-    dailyVarsInd.append(
-        CName.index(dailyVars[i])
+    df["Batch"] = batches
+
+    ## Now generate the plots
+    fig, axs = plt.subplots(nrowSP,ncolSP)
+    fig.set_figheight(15)
+    fig.set_figwidth(15)
+    nplot = 0
+    for i in range(nrowSP):
+        for j in range(ncolSP):
+            if nplot < allsims.shape[1]:
+                # axs[i,j].plot(t_span_plot, allsims[:,i])
+                if classtype == "noisy system" or classtype == "system":
+                    sns.lineplot(
+                        data=df[["Hours", "Batch", CName[nplot]]].dropna(), 
+                        x="Hours", 
+                        y = CName[nplot],
+                        ax = axs[i,j],
+                        hue="Batch"
+                    )
+                else:
+                    sns.scatterplot(
+                        data=df[["Hours", "Batch", CName[nplot]]].dropna(), 
+                        x="Hours", 
+                        y = CName[nplot],
+                        ax = axs[i,j],
+                        hue="Batch", s = 15
+                    )
+                axs[i,j].set_ylabel(CName[nplot])               
+                axs[i,j].set_title(CName[nplot])
+                axs[i,j].get_legend().remove()
+                nplot = nplot + 1
+            else:
+                fig.delaxes(axs[i][j])
+                nplot = nplot + 1
+
+    handles, labels = axs[1,1].get_legend_handles_labels()
+    plt.subplots_adjust(
+        left=0.125, bottom=0.1, right=0.9, top=0.9, wspace=0.2, hspace=0.5
     )
+    fig.legend(handles, labels, loc='right')
+    return(fig)
 
-bidailyVars = [x for x in  CName if ((x not in dailyVars) & (x not in hourlyVars)) ]
 
 
-## Now fill C_vector_sparse
-for i in range(len(hourlyVars)):
-    rows = np.in1d(t_span, hours)
-    cols = CName.index(hourlyVars[i])
-    C_vector_sparse[rows,cols] = C_sim[rows,cols]
-
-for i in range(len(dailyVars)):
-    rows = np.in1d(t_span, days)
-    cols = CName.index(dailyVars[i])
-    C_vector_sparse[rows,cols] = C_sim[rows,cols]
-
-for i in range(len(bidailyVars)):
-    rows = np.in1d(t_span, bidaily)
-    cols = CName.index(bidailyVars[i])
-    C_vector_sparse[rows,cols] = C_sim[rows,cols]
-
-## Now plot sparse values
-fig, axs = plt.subplots(3,4)
-
-nplot = 0
-for i in range(3):
-    for j in range(4):
-        if nplot <= (len(C_vector_sparse[0,:])-1):
-            axs[i,j].plot(t_span, C_vector_sparse[:,nplot], 'o')
-            axs[i,j].set_title(CName[nplot])
-            nplot = nplot + 1
-        else:
-            fig.delaxes(axs[i][j])
-            nplot = nplot + 1
- 
-
-for ax in axs.flat:
-    ax.set(xlabel = "Hours", ylabel = "g/L")
-
-plt.tight_layout()
-plt.savefig(os.getcwd()+"\Output"+"\\noisysystem_sparse.jpeg")
-plt.show()
-
-## Generally the data is received and handled as a dataframe.
-## so we translate the numpy array C_vector_sparse to a 
-## dataframe data.
-CName.insert(0, "Hours")
-dfData = pd.DataFrame(
-    np.concatenate(
-        (t_span.reshape(len(t_span), 1), C_vector_sparse),
-        axis = 1
-    ),
-    columns = CName
+## Plot the dynamic system
+plotsystem = plotFermentation(
+    classtype = "system",
+    CName = CName,
+    parsName = parsName,
+    parsVals = parsVals,
+    t_span = t_span,
+    n_batch = 10,
+    initialStates = initialValues,
+    varBatch = varBatch,
+    varMeasurement = varMeasurement,
+    sparse_dict = "none"    
 )
 
-dfData.to_csv(
-    os.getcwd() + "\\Output\\data.csv"
+plotsystem.suptitle("Deterministic system")
+plotsystem.savefig(
+    fname = os.getcwd() + "\\pyscripts\\Output\\system.png"
 )
+
+plotsystem.show()
+
+
+## Plot the dynamic system with noise    
+
+plotsystem = plotFermentation(
+    classtype = "noisy system",
+    CName = CName,
+    parsName = parsName,
+    parsVals = parsVals,
+    t_span = t_span,
+    n_batch = 10,
+    initialStates = initialValues,
+    varBatch = varBatch,
+    varMeasurement = varMeasurement,
+    sparse_dict = "none"    
+)
+
+plotsystem.suptitle("System with rate variation and noise")
+plotsystem.savefig(
+    fname = os.getcwd() + "\\pyscripts\\Output\\noisy_system.png"
+)
+
+plotsystem.show()
+
+
+## Plot the sparse samples of dynamic system with noise    
+
+plotsystem = plotFermentation(
+    classtype = "sparse noisy system",
+    CName = CName,
+    parsName = parsName,
+    parsVals = parsVals,
+    t_span = t_span,
+    n_batch = 10,
+    initialStates = initialValues,
+    varBatch = varBatch,
+    varMeasurement = varMeasurement,
+    sparse_dict = sparse_dict    
+)
+plotsystem.suptitle("Sparse samples from noisy system")
+plotsystem.savefig(
+    fname = os.getcwd() + "\\pyscripts\\Output\\noisy_system_sparse.png"
+)
+
+plotsystem.show()
+
+
